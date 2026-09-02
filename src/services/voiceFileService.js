@@ -2,48 +2,32 @@ const db = require('../config/db');
 const fs = require('fs').promises;
 const path = require('path');
 
-async function getVoiceFiles(companyId, { search = '', filter = '' }) {
-  let whereConditions = [`c.company_id = ?`];
-  let params = [companyId];
-
-  if (search) {
-    whereConditions.push(`af.original_name LIKE ?`);
-    params.push(`%${search}%`);
-  }
-
-  if (filter) {
-    whereConditions.push(`af.format = ?`);
-    params.push(filter);
-  }
-
-  const whereClause = whereConditions.join(' AND ');
-
+async function getVoiceFiles(companyId) {
   const [files] = await db.query(
-    `SELECT 
+    `SELECT
       af.id,
       af.original_name AS name,
-      COALESCE(c.name, 'N/A') AS campaignName,
       af.format,
       af.file_size_mb AS size,
       af.public_url AS url,
       af.created_at AS createdAt
-     FROM audio_files af
-     LEFT JOIN campaigns c ON af.company_id = c.company_id AND af.id = c.audio_file_id
-     WHERE ${whereClause}
-     ORDER BY af.id DESC`,
-    params
+    FROM audio_files af
+    WHERE af.company_id = ?
+    ORDER BY af.id DESC`,
+    [companyId]
   );
 
   return files.map((file, index) => ({
     sn: index + 1,
     id: file.id,
     name: file.name,
-    campaignName: file.campaignName,
-    format: (file.format || 'MP3').toUpperCase(),
+    format: (file.format || "MP3").toUpperCase(),
     size: `${file.size || 0} MB`,
     url: file.url,
+    createdAt: file.createdAt,
   }));
 }
+
 
 async function uploadVoiceFile(companyId, { fileName, file }) {
   if (!fileName) throw new Error('File name is required');

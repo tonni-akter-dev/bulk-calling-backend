@@ -1,7 +1,10 @@
 const voiceFileService = require('../services/voiceFileService');
 
 async function getVoiceFiles(req, res) {
-  const files = await voiceFileService.getVoiceFiles(req.user.companyId, req.query);
+  const files = await voiceFileService.getVoiceFiles(
+    req.user.companyId
+  );
+
   res.json({
     success: true,
     total: files.length,

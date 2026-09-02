@@ -12,6 +12,7 @@ const webhookRoutes = require('./routes/webhookRoutes');
 const contactRoutes = require('./routes/contactRoutes');
 const ticketRoutes = require('./routes/ticketRoutes');
 const planRoutes = require('./routes/planRoutes');
+const voiceFileRoutes = require('./routes/voiceFileRoutes');
 
 const app = express();
 
@@ -65,6 +66,7 @@ app.use('/api/webhooks', webhookRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/plans', planRoutes);
+app.use('/api/voice-files', voiceFileRoutes);
 
 /* =========================
    HEALTH CHECK
