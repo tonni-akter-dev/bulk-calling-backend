@@ -13,16 +13,13 @@ const contactRoutes = require('./routes/contactRoutes');
 const ticketRoutes = require('./routes/ticketRoutes');
 const planRoutes = require('./routes/planRoutes');
 const voiceFileRoutes = require('./routes/voiceFileRoutes');
+const dashboardRoutes = require('./routes/dashboardRoutes');
 
 const app = express();
 
-/* =========================
-   CORS
-========================= */
-
 app.use(
   cors({
-    origin: true, // Allow requests from all origins
+    origin: true, 
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
@@ -33,29 +30,13 @@ app.use(
   })
 );
 
-// Handle preflight requests
 app.options('*', cors());
-
-/* =========================
-   BODY PARSERS
-========================= */
-
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
-
-/* =========================
-   STATIC FILES
-========================= */
-
-// Uploaded audio / ticket attachments
 app.use(
   '/uploads',
   express.static(path.join(__dirname, '..', 'uploads'))
 );
-
-/* =========================
-   API ROUTES
-========================= */
 
 app.use('/api/auth', authRoutes);
 app.use('/api/subscriptions', subscriptionRoutes);
@@ -67,6 +48,7 @@ app.use('/api/contacts', contactRoutes);
 app.use('/api/tickets', ticketRoutes);
 app.use('/api/plans', planRoutes);
 app.use('/api/voice-files', voiceFileRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 /* =========================
    HEALTH CHECK
