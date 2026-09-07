@@ -1,3 +1,4 @@
+// src/services/walletService.js
 const db = require('../config/db');
 
 async function getBalance(companyId) {
@@ -81,4 +82,106 @@ async function hasEnoughForOneCall(companyId) {
   return Number(wallet_balance_bdt) >= Number(rate_per_minute_bdt);
 }
 
-module.exports = { getBalance, credit, debitForCall, listTransactions, hasEnoughForOneCall };
+// NEW FUNCTIONS
+async function addBalance(companyId, amount, method = 'bKash', reference = null) {
+  const conn = await db.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const [[company]] = await conn.query(
+      `SELECT wallet_balance_bdt FROM companies WHERE id=? FOR UPDATE`,
+      [companyId]
+    );
+    const newBalance = Number(company.wallet_balance_bdt) + Number(amount);
+
+    await conn.query(
+      `UPDATE companies SET wallet_balance_bdt=? WHERE id=?`,
+      [newBalance, companyId]
+    );
+    await conn.query(
+      `INSERT INTO wallet_transactions 
+       (company_id, type, amount, balance_after, reference_type, reference_id, note)
+       VALUES (?, 'topup', ?, ?, 'bkash', ?, ?)`,
+      [companyId, amount, newBalance, reference, `Payment via ${method} - ${reference}`]
+    );
+
+    await conn.commit();
+    return { success: true, newBalance };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+async function createPendingPayment(companyId, paymentID, amount, invoiceNumber) {
+  const conn = await db.getConnection();
+  try {
+    // Create table if not exists
+    await conn.query(`
+      CREATE TABLE IF NOT EXISTS pending_payments (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        company_id INT NOT NULL,
+        payment_id VARCHAR(255) NOT NULL UNIQUE,
+        amount DECIMAL(15,2) NOT NULL,
+        invoice_number VARCHAR(100) NOT NULL,
+        status ENUM('pending', 'completed', 'failed', 'canceled') DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        INDEX idx_company_id (company_id),
+        INDEX idx_payment_id (payment_id),
+        INDEX idx_status (status)
+      )
+    `);
+
+    await conn.query(
+      `INSERT INTO pending_payments (company_id, payment_id, amount, invoice_number, status)
+       VALUES (?, ?, ?, ?, 'pending')`,
+      [companyId, paymentID, amount, invoiceNumber]
+    );
+    
+    return { success: true };
+  } catch (err) {
+    console.error('Create pending payment error:', err);
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+async function updatePaymentStatus(paymentID, status) {
+  const conn = await db.getConnection();
+  try {
+    await conn.query(
+      `UPDATE pending_payments SET status = ?, updated_at = NOW() WHERE payment_id = ?`,
+      [status, paymentID]
+    );
+    return { success: true };
+  } catch (err) {
+    console.error('Update payment status error:', err);
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+async function getPendingPayment(paymentID) {
+  const [rows] = await db.query(
+    `SELECT * FROM pending_payments WHERE payment_id = ? AND status = 'pending'`,
+    [paymentID]
+  );
+  return rows[0] || null;
+}
+
+module.exports = { 
+  getBalance,
+  credit, 
+  debitForCall, 
+  listTransactions, 
+  hasEnoughForOneCall,
+  addBalance,
+  createPendingPayment,
+  updatePaymentStatus,
+  getPendingPayment
+};

@@ -1,72 +1,168 @@
-const db = require('../config/db');
-const bkash = require('../services/bkashService');
-const wallet = require('../services/walletService');
+// src/controllers/walletController.js
+const walletService = require('../services/walletService');
+const bkashService = require('../services/bkashService');
 
-async function getBalance(req, res) {
-  const balance = await wallet.getBalance(req.user.companyId);
-  res.json(balance);
-}
-
-async function getTransactions(req, res) {
-  const rows = await wallet.listTransactions(req.user.companyId, Number(req.query.limit) || 50);
-  res.json(rows);
-}
-
-// Step 1: create a bKash payment to add funds to the wallet
-async function initiateTopup(req, res) {
-  const { amount } = req.body;
-  const numericAmount = Number(amount);
-  if (!numericAmount || numericAmount < 10) {
-    return res.status(400).json({ error: 'Minimum top-up amount is 10 BDT' });
+exports.getBalance = async (req, res) => {
+  try {
+    const companyId = req.user?.companyId || 2;
+    const balance = await walletService.getBalance(companyId);
+    
+    res.json({
+      balance: Number(balance?.wallet_balance_bdt || 0),
+      currency: 'BDT',
+      isActive: true,
+      ratePerMinute: Number(balance?.rate_per_minute_bdt || 0)
+    });
+  } catch (error) {
+    console.error('Get balance error:', error);
+    res.status(500).json({ error: error.message });
   }
+};
 
-  const invoiceNumber = `TOPUP-${req.user.companyId}-${Date.now()}`;
-  const bkashPayment = await bkash.createPayment({
-    amount: numericAmount,
-    invoiceNumber,
-    callbackURL: `${process.env.BASE_URL}/api/wallet/bkash/callback`
-  });
-
-  await db.query(
-    `INSERT INTO wallet_topups (company_id, bkash_payment_id, amount, status, raw_response)
-     VALUES (?, ?, ?, 'initiated', ?)`,
-    [req.user.companyId, bkashPayment.paymentID, numericAmount, JSON.stringify(bkashPayment)]
-  );
-
-  res.json({ bkashURL: bkashPayment.bkashURL, paymentID: bkashPayment.paymentID });
-}
-
-// Step 2: bKash redirects the browser back here after checkout
-async function bkashCallback(req, res) {
-  const { paymentID, status } = req.query;
-
-  const [[topup]] = await db.query('SELECT * FROM wallet_topups WHERE bkash_payment_id=?', [paymentID]);
-  if (!topup) return res.status(404).send('Top-up record not found');
-
-  if (status !== 'success') {
-    await db.query('UPDATE wallet_topups SET status="cancelled" WHERE id=?', [topup.id]);
-    return res.redirect(`${process.env.BASE_URL}/wallet?status=cancelled`);
+exports.getTransactions = async (req, res) => {
+  try {
+    const companyId = req.user?.companyId || 2;
+    const limit = parseInt(req.query.limit) || 50;
+    
+    const transactions = await walletService.listTransactions(companyId, limit);
+    res.json(transactions);
+  } catch (error) {
+    console.error('Get transactions error:', error);
+    res.status(500).json({ error: error.message });
   }
+};
 
-  const result = await bkash.executePayment(paymentID);
+exports.initiateTopup = async (req, res) => {
+  try {
+    const { amount } = req.body;
+    const companyId = req.user?.companyId || 2;
+    
+    console.log('💰 Initiating topup:', { companyId, amount });
 
-  if (result.transactionStatus === 'Completed') {
-    await db.query(
-      'UPDATE wallet_topups SET status="completed", bkash_trx_id=?, raw_response=? WHERE id=?',
-      [result.trxID, JSON.stringify(result), topup.id]
-    );
+    if (!amount || amount < 20 || amount > 1000000) {
+      return res.status(400).json({
+        success: false,
+        message: 'Invalid amount. Must be between 20 and 1,000,000 TK'
+      });
+    }
 
-    await wallet.credit(topup.company_id, topup.amount, {
-      referenceType: 'wallet_topup',
-      referenceId: topup.id,
-      note: `bKash top-up, trxID ${result.trxID}`
+    const invoiceNumber = `INV-${Date.now()}-${Math.random().toString(36).substr(2, 6)}`;
+    
+    const paymentResponse = await bkashService.createPayment({
+      amount: amount,
+      invoiceNumber: invoiceNumber,
+      callbackURL: process.env.BKASH_CALLBACK_URL
     });
 
-    return res.redirect(`${process.env.BASE_URL}/wallet?status=success`);
-  } else {
-    await db.query('UPDATE wallet_topups SET status="failed", raw_response=? WHERE id=?', [JSON.stringify(result), topup.id]);
-    return res.redirect(`${process.env.BASE_URL}/wallet?status=failed`);
-  }
-}
+    console.log('📦 Payment Response:', paymentResponse);
 
-module.exports = { getBalance, getTransactions, initiateTopup, bkashCallback };
+    if (paymentResponse.statusCode === '0000' && paymentResponse.paymentID) {
+      // Store in memory
+      if (!global.pendingPayments) {
+        global.pendingPayments = new Map();
+      }
+      global.pendingPayments.set(paymentResponse.paymentID, {
+        companyId,
+        amount,
+        invoiceNumber,
+        status: 'pending',
+        created: Date.now()
+      });
+
+      // Also store in database
+      await walletService.createPendingPayment(
+        companyId,
+        paymentResponse.paymentID,
+        amount,
+        invoiceNumber
+      );
+
+      // Return the bkashURL from the response
+      return res.json({
+        success: true,
+        paymentID: paymentResponse.paymentID,
+        bkashURL: paymentResponse.bkashURL || `https://sandbox.payment.bkash.com/?paymentId=${paymentResponse.paymentID}`,
+        message: 'Payment initiated successfully'
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        message: paymentResponse.statusMessage || 'Failed to create payment'
+      });
+    }
+  } catch (error) {
+    console.error('❌ Initiate topup error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message || 'Failed to initiate payment'
+    });
+  }
+};
+
+exports.bkashCallback = async (req, res) => {
+  try {
+    const { paymentID, status } = req.body;
+    
+    console.log('📞 bKash Callback received:', { paymentID, status });
+
+    if (status === 'success' || status === 'Completed') {
+      const executeResult = await bkashService.executePayment(paymentID);
+      
+      if (executeResult.transactionStatus === 'Completed') {
+        let pendingPayment = null;
+        
+        if (global.pendingPayments && global.pendingPayments.has(paymentID)) {
+          pendingPayment = global.pendingPayments.get(paymentID);
+        }
+        
+        if (!pendingPayment) {
+          pendingPayment = await walletService.getPendingPayment(paymentID);
+        }
+        
+        if (pendingPayment) {
+          await walletService.addBalance(
+            pendingPayment.companyId,
+            pendingPayment.amount,
+            'bKash',
+            paymentID
+          );
+          
+          await walletService.updatePaymentStatus(paymentID, 'completed');
+          
+          if (global.pendingPayments) {
+            global.pendingPayments.delete(paymentID);
+          }
+
+          const frontendURL = process.env.FRONTEND_URL || 'http://localhost:3000';
+          return res.redirect(`${frontendURL}/credit?success=true&amount=${pendingPayment.amount}`);
+        }
+      }
+    }
+
+    const frontendURL = process.env.FRONTEND_URL || 'http://localhost:3000';
+    return res.redirect(`${frontendURL}/credit?success=false&error=Payment failed or canceled`);
+  } catch (error) {
+    console.error('❌ bKash callback error:', error);
+    const frontendURL = process.env.FRONTEND_URL || 'http://localhost:3000';
+    return res.redirect(`${frontendURL}/credit?success=false&error=${encodeURIComponent(error.message)}`);
+  }
+};
+
+exports.checkPaymentStatus = async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    const result = await bkashService.queryPayment(paymentId);
+    
+    res.json({
+      success: true,
+      status: result.transactionStatus || 'pending',
+      amount: result.amount || 0
+    });
+  } catch (error) {
+    console.error('Check payment status error:', error);
+    res.status(500).json({
+      success: false,
+      message: error.message
+    });
+  }
+};
