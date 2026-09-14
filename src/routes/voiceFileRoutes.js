@@ -11,7 +11,8 @@ router.use(requireAuth, requireActiveSubscription);
 router.get('/', asyncHandler(ctrl.getVoiceFiles));
 
 // Upload new voice file (multipart/form-data: field name "file" & body "fileName")
-router.post('/upload', uploadAudio.single('file'), asyncHandler(ctrl.uploadVoiceFile));
+router.post('/', uploadAudio.single('file'), asyncHandler(ctrl.uploadVoiceFile));
+router.post('/register-url', asyncHandler(ctrl.registerVoiceByUrl ));
 
 // Delete voice file by ID
 router.delete('/:id', asyncHandler(ctrl.deleteVoiceFile));
