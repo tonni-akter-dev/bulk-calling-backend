@@ -275,7 +275,31 @@ async function getCampaignStats(req, res) {
   );
   res.json({ success: true, data: stats });
 }
+// ============================================================
+// 🆕 Call History controller
+// ============================================================
+async function getCallHistory(req, res) {
+  try {
+    const data = await campaignService.getCallHistory(
+      req.user.companyId,
+      req.user.role,
+      {
+        page: req.query.page,
+        per_page: req.query.per_page,
+        status: req.query.status,
+        mobile: req.query.mobile,
+        campaign_id: req.query.campaign_id,
+        date_from: req.query.date_from,
+        date_to: req.query.date_to,
+      }
+    );
 
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error('getCallHistory error:', err);
+    res.status(500).json({ success: false, message: err.message });
+  }
+}
 // ============================================================
 // 🆕 IP Call BD Webhook — No auth required
 // ============================================================
@@ -294,6 +318,30 @@ async function voiceWebhook(req, res) {
     return res.status(200).json({ received: true, error: err.message });
   }
 }
+async function getAllCallLogs(req, res) {
+  try {
+    const ipcallSync = require('../services/ipcallSyncService');
+
+    const data = await ipcallSync.getIpcallCallLogs({
+      mobile: req.query.mobile,
+      status: req.query.status,
+      agent: req.query.agent,
+      call_type: req.query.call_type,
+      date_from: req.query.date_from,
+      date_to: req.query.date_to,
+      page: req.query.page,
+      per_page: req.query.per_page,
+    });
+
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error('getAllCallLogs error:', err);
+    res.status(500).json({
+      success: false,
+      message: err.message || 'Failed to load call logs',
+    });
+  }
+}
 
 module.exports = {
   launchCampaign,
@@ -304,4 +352,6 @@ module.exports = {
   deleteCampaign,
   getCampaignStats,
   voiceWebhook, // 🆕
+  getCallHistory,
+  getAllCallLogs
 };

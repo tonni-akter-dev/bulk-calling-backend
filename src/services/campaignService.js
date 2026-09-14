@@ -1253,6 +1253,106 @@ async function registerVoiceByUrl(companyId, { voice_name, audio_url }) {
     campaignId: reg.campaignId,      // IP Call BD এর v14_xxx
   };
 }
+
+
+// ============================================================
+// 🆕 Call History — paginated list
+// ============================================================
+async function getCallHistory(companyId, role, filters = {}) {
+  const isAdmin = role === 'admin' || role === 'super_admin';
+  const {
+    page = 1,
+    per_page = 50,
+    status,
+    mobile,
+    campaign_id,
+    date_from,
+    date_to,
+  } = filters;
+
+  const offset = (Number(page) - 1) * Number(per_page);
+  const where = [];
+  const params = [];
+
+  if (!isAdmin) {
+    where.push('c.company_id = ?');
+    params.push(companyId);
+  }
+  if (status) {
+    where.push('cn.status = ?');
+    params.push(status);
+  }
+  if (mobile) {
+    where.push('cn.phone_number LIKE ?');
+    params.push(`%${mobile}%`);
+  }
+  if (campaign_id) {
+    where.push('cn.campaign_id = ?');
+    params.push(campaign_id);
+  }
+  if (date_from) {
+    where.push('cn.created_at >= ?');
+    params.push(`${date_from} 00:00:00`);
+  }
+  if (date_to) {
+    where.push('cn.created_at <= ?');
+    params.push(`${date_to} 23:59:59`);
+  }
+
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  const [[countRow]] = await db.query(
+    `SELECT COUNT(*) AS total
+       FROM campaign_numbers cn
+       JOIN campaigns c ON cn.campaign_id = c.id
+       ${whereClause}`,
+    params
+  );
+
+  const total = countRow.total || 0;
+  const total_pages = Math.ceil(total / Number(per_page));
+
+  const [rows] = await db.query(
+    `SELECT
+        cn.id,
+        cn.campaign_id,
+        cn.phone_number,
+        cn.status,
+        cn.duration_seconds AS duration,
+        cn.external_call_id,
+        cn.recording_url,
+        cn.dtmf,
+        cn.created_at,
+        cn.updated_at,
+        c.title AS campaign_name
+      FROM campaign_numbers cn
+      JOIN campaigns c ON cn.campaign_id = c.id
+      ${whereClause}
+      ORDER BY cn.id DESC
+      LIMIT ? OFFSET ?`,
+    [...params, Number(per_page), offset]
+  );
+
+  return {
+    page: Number(page),
+    per_page: Number(per_page),
+    total,
+    total_pages,
+    data: rows.map((r) => ({
+      id: r.id,
+      campaign_id: r.campaign_id,
+      campaign_name: r.campaign_name,
+      phone: r.phone_number,
+      status: r.status,
+      duration: r.duration || 0,
+      external_call_id: r.external_call_id,
+      recording_url: r.recording_url,
+      dtmf: r.dtmf,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
+    })),
+  };
+}
 module.exports = {
   launchBulkCampaign,
   getLiveCallLogs,
@@ -1264,5 +1364,7 @@ module.exports = {
   dispatchIpcallRequests,
   handleVoiceWebhook,
   registerVoiceWithIpcall,
-  registerVoiceByUrl
+  registerVoiceByUrl,
+    getCallHistory,        
+
 };
