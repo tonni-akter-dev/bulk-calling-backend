@@ -27,6 +27,7 @@ const planRoutes = require("./src/routes/planRoutes");
 const voiceFileRoutes = require("./src/routes/voiceFileRoutes");
 const dashboardRoutes = require("./src/routes/dashboardRoutes");
 const contactFormRoutes = require("./src/routes/contactFormRoutes");
+const settingsRoutes = require("./src/routes/settingsRoutes");
 
 const app = express();
 
@@ -54,6 +55,8 @@ app.use("/api/voice-files", voiceFileRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/contactForm", contactFormRoutes);
 app.use("/api/webhooks", webhookRoutes);
+// Mount করে দাও
+app.use('/api/admin/settings', settingsRoutes);
 
 app.get("/health", (req, res) => {
   res.json({
