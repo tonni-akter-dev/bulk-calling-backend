@@ -398,6 +398,92 @@ async function initiateSubscription(req, res) {
   });
 }
 
+
+async function getSubscriptionById(req, res) {
+  const { id } = req.params;
+
+  if (req.user.role !== 'super_admin' && req.user.role !== 'admin') {
+    return res.status(403).json({ 
+      error: 'Access denied. Admin only.' 
+    });
+  }
+
+  // ── 1. Subscription details ──
+  const [subscriptionRows] = await db.query(
+    `
+      SELECT
+        s.id,
+        s.company_id,
+        s.plan_id,
+        s.status,
+        s.calls_used_this_period,
+        s.current_period_start,
+        s.current_period_end,
+        s.created_at,
+        s.updated_at,
+
+        p.name AS plan_name,
+        p.price_bdt,
+        p.monthly_call_limit,
+        p.max_concurrent_calls,
+
+        c.name AS company_name,
+        c.email AS company_email,
+        c.wallet_balance_bdt
+
+      FROM subscriptions s
+      JOIN plans p ON p.id = s.plan_id
+      JOIN companies c ON c.id = s.company_id
+      WHERE s.id = ?
+    `,
+    [id]
+  );
+
+  if (subscriptionRows.length === 0) {
+    return res.status(404).json({ 
+      error: 'Subscription not found' 
+    });
+  }
+
+  const subscription = subscriptionRows[0];
+
+  // ── 2. Users for this company ──
+  const [users] = await db.query(
+    `
+      SELECT u.id, u.name, u.email, u.role
+      FROM users u
+      WHERE u.company_id = ?
+      ORDER BY u.created_at ASC
+    `,
+    [subscription.company_id]
+  );
+
+  // ── 3. 🆕 Wallet totals from transactions ──
+  const [[walletTotals]] = await db.query(
+    `
+      SELECT
+        COALESCE(SUM(CASE WHEN type = 'topup' THEN amount ELSE 0 END), 0) AS total_added,
+        COALESCE(SUM(CASE WHEN type = 'call_charge' THEN ABS(amount) ELSE 0 END), 0) AS total_used
+      FROM wallet_transactions
+      WHERE company_id = ?
+    `,
+    [subscription.company_id]
+  );
+
+  // ── 4. Combine ──
+  const result = {
+    ...subscription,
+    users: users || [],
+    wallet: {
+      balance: Number(subscription.wallet_balance_bdt || 0),
+      total_added: Number(walletTotals?.total_added || 0),
+      total_used: Number(walletTotals?.total_used || 0),
+      currency: "BDT",
+    },
+  };
+
+  res.json(result);
+}
 /* ============================================================
    BKASH CALLBACK - TEMPORARILY DISABLED
 ============================================================ */
@@ -420,5 +506,6 @@ module.exports = {
   getSubscriptionById,
   getSubscriptionStats,
   initiateSubscription,
+  getSubscriptionById,
   bkashCallback,
 };

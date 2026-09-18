@@ -12,7 +12,7 @@ function normalizePhone(raw) {
 }
 
 // ============================================================
-// Super Admin creates a new user (company admin)
+// Super Admin creates a new user
 // ============================================================
 async function createUser(req, res) {
   const {
@@ -21,7 +21,7 @@ async function createUser(req, res) {
     email,
     password,
     phone = null,
-    role = "user",
+    role = "admin",
   } = req.body;
 
   if (req.user.role !== "super_admin") {
@@ -121,7 +121,7 @@ async function createUser(req, res) {
 }
 
 // ============================================================
-// Regular user signup
+// Regular user signup — 🆕 ROLE = "admin"
 // ============================================================
 async function signup(req, res) {
   const { companyName, name, email, phone = null, password } = req.body;
@@ -169,17 +169,21 @@ async function signup(req, res) {
     const companyId = companyResult.insertId;
 
     const passwordHash = await bcrypt.hash(password, 10);
+
+    // 🆕 Role explicitly "admin"
+    const userRole = "admin";
+
     const [userResult] = await conn.query(
       `INSERT INTO users
          (company_id, name, email, phone, password_hash, role)
-       VALUES (?, ?, ?, ?, ?, "admin")`,
-      [companyId, name, email, normalizedPhone, passwordHash]
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [companyId, name, email, normalizedPhone, passwordHash, userRole]
     );
 
     await conn.commit();
 
     const userId = userResult.insertId;
-    const role = "admin";
+    const role = userRole;
 
     const token = jwt.sign(
       { userId, companyId, role },
@@ -315,13 +319,12 @@ async function getMe(req, res) {
 }
 
 // ============================================================
-// PUT /api/auth/update-profile — Update user profile + company name
+// PUT /api/auth/update-profile
 // ============================================================
 async function updateProfile(req, res) {
   try {
     const { name, email, phone, company_name } = req.body;
 
-    // ── Validate required fields ──
     if (!name || !name.trim()) {
       return res.status(400).json({
         success: false,
@@ -329,7 +332,6 @@ async function updateProfile(req, res) {
       });
     }
 
-    // ── Get current user (need company_id) ──
     const [[currentUser]] = await db.query(
       `SELECT id, company_id, email FROM users WHERE id = ?`,
       [req.user.userId]
@@ -344,7 +346,6 @@ async function updateProfile(req, res) {
 
     const normalizedPhone = normalizePhone(phone);
 
-    // ── Phone duplicate check ──
     if (normalizedPhone) {
       const [phoneExists] = await db.query(
         `SELECT id FROM users WHERE phone = ? AND id != ?`,
@@ -358,7 +359,6 @@ async function updateProfile(req, res) {
       }
     }
 
-    // ── Email duplicate check (if email provided) ──
     if (email && email.trim()) {
       const [emailExists] = await db.query(
         `SELECT id FROM users WHERE email = ? AND id != ?`,
@@ -371,24 +371,20 @@ async function updateProfile(req, res) {
         });
       }
 
-      // Update email too
       await db.query(
         `UPDATE users SET name = ?, email = ?, phone = ? WHERE id = ?`,
         [name.trim(), email.trim(), normalizedPhone, req.user.userId]
       );
     } else {
-      // Email not provided — keep existing
       await db.query(
         `UPDATE users SET name = ?, phone = ? WHERE id = ?`,
         [name.trim(), normalizedPhone, req.user.userId]
       );
     }
 
-    // ── Update company name (if provided) ──
     if (company_name && company_name.trim()) {
       const trimmedCompany = company_name.trim();
 
-      // Check duplicate company name (other than self)
       const [dupCompany] = await db.query(
         `SELECT id FROM companies WHERE name = ? AND id != ?`,
         [trimmedCompany, currentUser.company_id]
@@ -407,7 +403,6 @@ async function updateProfile(req, res) {
       ]);
     }
 
-    // ── Return fresh user data ──
     const [rows] = await db.query(
       `SELECT 
          u.id, u.name, u.email, u.phone, u.role,
@@ -460,6 +455,10 @@ async function getAllUsers(req, res) {
     data: rows,
   });
 }
+
+// ============================================================
+// POST /api/auth/logout
+// ============================================================
 async function logout(req, res) {
   try {
     const isProduction = process.env.NODE_ENV === "production";
@@ -494,5 +493,5 @@ module.exports = {
   getMe,
   getAllUsers,
   updateProfile,
-  logout
+  logout,
 };
