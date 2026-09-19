@@ -1,3 +1,4 @@
+// src/services/settingsService.js
 const db = require('../config/db');
 
 let cache = null;
@@ -20,12 +21,25 @@ async function loadRaw() {
 }
 
 // ============================================================
-// Get API key — direct read, no encryption
+// Get API key — DB only, no env fallback
 // ============================================================
-
 async function getIpcallApiKey() {
+  // Return from cache if fresh
+  if (cache && Date.now() - cacheAt < TTL) {
+    return cache.apiKey;
+  }
+
   const raw = await loadRaw();
 
+  // ✅ Only DB — no env fallback
+  const keyRow = raw['ipcall_api_key'];
+  const apiKey = keyRow?.setting_value
+    ? String(keyRow.setting_value).trim()
+    : '';
+
+  if (!apiKey) {
+    console.warn('⚠️ [settings] IPCall API key not found in DB. Please set it in Admin → Settings.');
+  }
 
   cache = {
     apiKey,
@@ -33,23 +47,27 @@ async function getIpcallApiKey() {
     maxBatchSize: Number(raw['ipcall_max_batch_size']?.setting_value || 20),
   };
   cacheAt = Date.now();
+
   return apiKey;
 }
 
 async function getDelaySeconds() {
-  if (!cache) await getIpcallApiKey();
+  if (!cache || Date.now() - cacheAt >= TTL) {
+    await getIpcallApiKey();
+  }
   return cache?.delaySeconds ?? 38;
 }
 
 async function getMaxBatchSize() {
-  if (!cache) await getIpcallApiKey();
+  if (!cache || Date.now() - cacheAt >= TTL) {
+    await getIpcallApiKey();
+  }
   return cache?.maxBatchSize ?? 20;
 }
 
 // ============================================================
-// Public settings — returns FULL key (no masking)
+// Public settings
 // ============================================================
-
 async function getPublicSettings() {
   const raw = await loadRaw();
   const keyRow = raw['ipcall_api_key'];
@@ -60,7 +78,7 @@ async function getPublicSettings() {
 
   return {
     hasApiKey: !!apiKey,
-    apiKey: apiKey,               // ✅ full key returned (no mask)
+    apiKey: apiKey,
     delaySeconds: Number(raw['ipcall_delay_seconds']?.setting_value || 38),
     maxBatchSize: Number(raw['ipcall_max_batch_size']?.setting_value || 20),
     updatedAt: keyRow?.updated_at || null,
@@ -68,9 +86,8 @@ async function getPublicSettings() {
 }
 
 // ============================================================
-// Save — plain text, no encryption
+// Save — plain text
 // ============================================================
-
 async function updateSettings(adminUserId, { apiKey, delaySeconds, maxBatchSize }) {
   const jobs = [];
 
