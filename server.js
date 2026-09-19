@@ -42,15 +42,28 @@ const ALLOWED_ORIGINS = [
   "http://localhost:3001",
 ];
 
+
 const corsOptions = {
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
 
+    // Exact whitelist match
     if (ALLOWED_ORIGINS.includes(origin)) {
       return callback(null, true);
     }
 
+    // ✅ Allow any *.aicallbd.com subdomain
+    if (origin.endsWith(".aicallbd.com") || origin === "https://aicallbd.com") {
+      return callback(null, true);
+    }
+
+    // ✅ Allow Vercel preview deployments
     if (origin.endsWith(".vercel.app")) {
+      return callback(null, true);
+    }
+
+    // ✅ Allow Railway deployments
+    if (origin.endsWith(".railway.app")) {
       return callback(null, true);
     }
 
