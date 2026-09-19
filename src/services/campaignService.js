@@ -595,11 +595,14 @@ async function registerVoiceByUrl(companyId, { voice_name, audio_url }) {
   const ext = audio_url.split("?")[0].split(".").pop()?.toLowerCase() || "mp3";
   const format = ["mp3", "wav", "ogg"].includes(ext) ? ext : "mp3";
 
+  // ✅ Provide a placeholder for stored_path (URL-based, no local file)
+  const storedPath = audio_url; // or "remote_url" or "" — depends on your schema
+
   const [result] = await db.query(
     `INSERT INTO audio_files
-       (company_id, original_name, public_url, format, campaign_id, created_at)
-     VALUES (?, ?, ?, ?, ?, NOW())`,
-    [companyId, voice_name, audio_url, format, reg.campaignId],
+       (company_id, original_name, stored_path, public_url, format, campaign_id, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+    [companyId, voice_name, storedPath, audio_url, format, reg.campaignId]
   );
 
   return {
