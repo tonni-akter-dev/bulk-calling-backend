@@ -36,6 +36,7 @@ const app = express();
 const ALLOWED_ORIGINS = [
   "https://aicallbd.com",
   "https://www.aicallbd.com",
+    "https://api.aicallbd.com",                
   "https://ai-calling-frontend-six.vercel.app",
   "http://localhost:3000",
   "http://localhost:3001",
