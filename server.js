@@ -113,7 +113,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   if (
     req.path.includes("/webhooks/") ||
-    req.path.includes("/campaigns/live-logs") ||
+    // req.path.includes("/campaigns/live-logs") ||
     req.path.includes("/voice-status")
   ) {
     console.log("====================================");
