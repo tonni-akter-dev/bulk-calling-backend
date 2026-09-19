@@ -14,6 +14,7 @@ function getBaseUrl() {
 
 async function getApiKey() {
   const apiKey = await settingsService.getIpcallApiKey();
+  console.log(apiKey)
   if (!apiKey) {
     throw new Error(
       "IPCall API key not configured. Please set it in Admin → Settings.",
