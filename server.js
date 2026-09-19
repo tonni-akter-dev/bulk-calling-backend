@@ -38,20 +38,14 @@ const settingsRoutes = require("./src/routes/settingsRoutes");
 const app = express();
 
 // ============================================================
-// 🚨 CRITICAL: BODY PARSERS MUST BE FIRST (before routes)
+// 🚨 CRITICAL: BODY PARSERS MUST BE FIRST
 // ============================================================
-
-// JSON parser — for frontend API calls AND IPCall webhook
 app.use(express.json({ limit: "10mb" }));
-
-// URL-encoded parser — for form submissions
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
-
-// Raw text fallback — in case IPCall sends unexpected content type
 app.use(express.text({ type: ["text/*", "application/*"], limit: "10mb" }));
 
 // ============================================================
-// CORS
+// CORS Configuration
 // ============================================================
 const ALLOWED_ORIGINS = [
   "https://aicallbd.com",
@@ -108,12 +102,11 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// LOGGER — MUST BE BEFORE ROUTES
+// LOGGER — Only for important requests (no live-logs spam)
 // ============================================================
 app.use((req, res, next) => {
   if (
     req.path.includes("/webhooks/") ||
-    // req.path.includes("/campaigns/live-logs") ||
     req.path.includes("/voice-status")
   ) {
     console.log("====================================");
@@ -198,7 +191,37 @@ app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log(`✅ CORS allowed origins:`, ALLOWED_ORIGINS.join(", "));
   console.log(`✅ BASE_URL:`, process.env.BASE_URL || "(not set!)");
+  console.log(`✅ IP Call BD auto-sync scheduled (every 2 min)`);
 });
+
+// ============================================================
+// IPCall Auto-Sync — Webhook Fallback
+// Runs every 2 minutes to pull call status from IPCall
+// ============================================================
+const ipcallSync = require("./src/services/ipcallSyncService");
+
+// Initial sync 30s after server start
+setTimeout(async () => {
+  try {
+    console.log("[AutoSync] Initial sync starting...");
+    const result = await ipcallSync.syncRecentCalls();
+    console.log("[AutoSync] Initial result:", result);
+  } catch (err) {
+    console.error("[AutoSync initial] error:", err.message);
+  }
+}, 30 * 1000);
+
+// Then every 2 minutes
+setInterval(async () => {
+  try {
+    const result = await ipcallSync.syncRecentCalls();
+    if (result?.updated > 0) {
+      console.log(`[AutoSync] ✅ Updated ${result.updated} calls`);
+    }
+  } catch (err) {
+    console.error("[AutoSync] error:", err.message);
+  }
+}, 2 * 60 * 1000);
 
 // ============================================================
 // GLOBAL ERROR HANDLERS

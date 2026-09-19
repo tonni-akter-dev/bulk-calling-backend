@@ -7,14 +7,13 @@ const { parseNumbersFromText } = require("../utils/numberParser");
 
 const IPCALL_BASE = process.env.IPCALL_BASE_URL || "https://ipcall.bd/voiceapi";
 
-// Helper: strip trailing slashes
+// Helper: strip trailing slashes from BASE_URL
 function getBaseUrl() {
   return (process.env.BASE_URL || "").replace(/\/+$/, "");
 }
 
 async function getApiKey() {
   const apiKey = await settingsService.getIpcallApiKey();
-  console.log(apiKey)
   if (!apiKey) {
     throw new Error(
       "IPCall API key not configured. Please set it in Admin → Settings.",
@@ -23,6 +22,9 @@ async function getApiKey() {
   return apiKey;
 }
 
+// ============================================================
+// Register voice with IPCall
+// ============================================================
 async function registerVoiceWithIpcall({ voice_name, audio_url }) {
   const apiKey = await getApiKey();
 
@@ -44,21 +46,32 @@ async function registerVoiceWithIpcall({ voice_name, audio_url }) {
 }
 
 // ============================================================
-// Status mapper
+// Status mapper — robust
 // ============================================================
 function mapIpcallStatusToDb(ipcallStatus, statusCode) {
   const s = String(ipcallStatus || "").toLowerCase().trim();
 
-  if (s === "answered") return "completed";
+  // Answered variants
+  if (s === "answered" || s === "answer") return "completed";
+
+  // Busy
   if (s === "busy") return "busy";
-  if (s === "no answer" || s === "no-answer") return "no-answer";
+
+  // No answer
+  if (s === "no answer" || s === "no-answer" || s === "noanswer")
+    return "no-answer";
+
+  // Missed / Failed
   if (s === "missed") return "failed";
   if (s === "failed") return "failed";
+
+  // Ringing / In-progress
   if (s === "ringing") return "ringing";
   if (s === "in-progress" || s === "in progress" || s === "progress")
     return "in-progress";
 
-  if (statusCode === "1") return "completed";
+  // Fallback on status_code
+  if (String(statusCode) === "1") return "completed";
 
   console.warn("[IPCALL] UNKNOWN STATUS:", { ipcallStatus, statusCode });
   return null;
@@ -214,7 +227,7 @@ async function launchBulkCampaign(
 // ============================================================
 async function dispatchIpcallRequests({
   campaignId,
-  companyId, // ✅ Now received
+  companyId,
   numbers,
   ipcallCampaignId,
 }) {
@@ -222,7 +235,15 @@ async function dispatchIpcallRequests({
     `SELECT id, phone_number FROM campaign_numbers WHERE campaign_id = ?`,
     [campaignId],
   );
-  const phoneToRowId = new Map(rows.map((r) => [r.phone_number, r.id]));
+
+  // ✅ FIX: Store all rowIds per phone number (array) to handle duplicates
+  const phoneToRowIds = new Map();
+  for (const r of rows) {
+    if (!phoneToRowIds.has(r.phone_number)) {
+      phoneToRowIds.set(r.phone_number, []);
+    }
+    phoneToRowIds.get(r.phone_number).push(r.id);
+  }
 
   const webhookUrl = `${getBaseUrl()}/api/webhooks/voice-status`;
   const apiKey = await getApiKey();
@@ -234,13 +255,22 @@ async function dispatchIpcallRequests({
     `[campaign ${campaignId}] dispatching ${numbers.length} calls | delay=${delaySeconds}s batch=${batchSize} | webhook=${webhookUrl}`,
   );
 
+  // Track which rowIds have been used
+  const usedRowIds = new Set();
+
   for (let i = 0; i < numbers.length; i += batchSize) {
     const batch = numbers.slice(i, i + batchSize);
 
     await Promise.all(
       batch.map(async (phone) => {
-        const rowId = phoneToRowId.get(phone);
-        if (!rowId) return;
+        // ✅ FIX: Pick first unused rowId for this phone
+        const rowIds = phoneToRowIds.get(phone) || [];
+        const rowId = rowIds.find((id) => !usedRowIds.has(id));
+        if (!rowId) {
+          console.warn(`[IPCall] No free row for phone ${phone}`);
+          return;
+        }
+        usedRowIds.add(rowId);
 
         try {
           const url = new URL(`${IPCALL_BASE}/newrequest/`);
@@ -250,14 +280,14 @@ async function dispatchIpcallRequests({
           url.searchParams.set("webhook", webhookUrl);
           url.searchParams.set("data", `camp_${campaignId}_num_${rowId}`);
 
-          console.log(`[IPCall] Sending: ${phone} | data=camp_${campaignId}_num_${rowId}`);
+          console.log(
+            `[IPCall] Sending: ${phone} | data=camp_${campaignId}_num_${rowId}`,
+          );
 
           const { data } = await axios.get(url.toString(), { timeout: 30000 });
 
           if (data.status === "success") {
-            // ✅ Keep as 'queued' — wait for webhook to update
-            // (Previously set to 'ringing' which got stuck if webhook failed)
-            console.log(`[IPCall] ✅ ${phone} accepted`);
+            console.log(`[IPCall] ✅ ${phone} accepted (row ${rowId})`);
           } else {
             console.warn(`[IPCall] ❌ ${phone} rejected:`, data.message);
             await db.query(
@@ -285,7 +315,9 @@ async function dispatchIpcallRequests({
 // Webhook handler
 // ============================================================
 async function handleVoiceWebhook(payload) {
-  console.log("[handleVoiceWebhook] payload:", JSON.stringify(payload));
+  console.log("====================================");
+  console.log("[handleVoiceWebhook] RAW payload:", JSON.stringify(payload));
+  console.log("====================================");
 
   const { id, status_code, status, DTMF, data, caller, number, phone } =
     payload || {};
@@ -298,22 +330,42 @@ async function handleVoiceWebhook(payload) {
   if (match) {
     campaignId = Number(match[1]);
     numberRowId = Number(match[2]);
-    console.log(`[webhook] matched by data → campaign=${campaignId} num=${numberRowId}`);
-  } else {
-    // Fallback: match by caller phone number
+    console.log(
+      `[webhook] matched by data → campaign=${campaignId} num=${numberRowId}`,
+    );
+
+    // ✅ Verify this row actually exists
+    const [[exists]] = await db.query(
+      `SELECT id FROM campaign_numbers WHERE id = ? AND campaign_id = ?`,
+      [numberRowId, campaignId],
+    );
+    if (!exists) {
+      console.warn(
+        `[webhook] ⚠️ data matched but row does not exist: ${numberRowId}/${campaignId}`,
+      );
+      campaignId = null;
+      numberRowId = null;
+    }
+  }
+
+  // Fallback: match by caller phone number
+  if (!campaignId || !numberRowId) {
     const callerNumber = caller || number || phone;
     if (callerNumber) {
       console.log(`[webhook] fallback: lookup by phone ${callerNumber}`);
       const [[row]] = await db.query(
         `SELECT id, campaign_id FROM campaign_numbers
          WHERE phone_number = ?
+           AND status IN ('queued','ringing','in-progress')
          ORDER BY id DESC LIMIT 1`,
         [callerNumber],
       );
       if (row) {
         campaignId = row.campaign_id;
         numberRowId = row.id;
-        console.log(`[webhook] matched by phone → campaign=${campaignId} num=${numberRowId}`);
+        console.log(
+          `[webhook] matched by phone → campaign=${campaignId} num=${numberRowId}`,
+        );
       }
     }
   }
@@ -326,27 +378,36 @@ async function handleVoiceWebhook(payload) {
   const dbStatus = mapIpcallStatusToDb(status, status_code);
 
   if (!dbStatus) {
-    console.warn("[webhook] ❌ unknown status, skipping:", { status, status_code });
+    console.warn("[webhook] ❌ unknown status, skipping:", {
+      status,
+      status_code,
+    });
     return { handled: false, reason: "unknown_status" };
   }
 
   // Update campaign_numbers
   await db.query(
     `UPDATE campaign_numbers
-       SET status = ?,
-           external_call_id = COALESCE(?, external_call_id),
-           dtmf = COALESCE(?, dtmf),
-           updated_at = NOW()
-     WHERE id = ? AND campaign_id = ?`,
+        SET status = ?,
+            external_call_id = COALESCE(?, external_call_id),
+            dtmf = COALESCE(?, dtmf),
+            updated_at = NOW()
+      WHERE id = ? AND campaign_id = ?`,
     [dbStatus, id || null, DTMF || null, numberRowId, campaignId],
   );
 
   console.log(`[webhook] ✅ Updated num=${numberRowId} → ${dbStatus}`);
 
-  // If completed → increment campaign counter + debit wallet (if duration available)
+  // ✅ FIX: Recalculate calls_completed instead of +1
   if (dbStatus === "completed") {
     await db.query(
-      `UPDATE campaigns SET calls_completed = calls_completed + 1, updated_at = NOW() WHERE id = ?`,
+      `UPDATE campaigns c
+          SET c.calls_completed = (
+            SELECT COUNT(*) FROM campaign_numbers
+            WHERE campaign_id = c.id AND status = 'completed'
+          ),
+          c.updated_at = NOW()
+        WHERE c.id = ?`,
       [campaignId],
     );
   }
@@ -595,14 +656,13 @@ async function registerVoiceByUrl(companyId, { voice_name, audio_url }) {
   const ext = audio_url.split("?")[0].split(".").pop()?.toLowerCase() || "mp3";
   const format = ["mp3", "wav", "ogg"].includes(ext) ? ext : "mp3";
 
-  // ✅ Provide a placeholder for stored_path (URL-based, no local file)
-  const storedPath = audio_url; // or "remote_url" or "" — depends on your schema
+  const storedPath = audio_url;
 
   const [result] = await db.query(
     `INSERT INTO audio_files
        (company_id, original_name, stored_path, public_url, format, campaign_id, created_at)
      VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-    [companyId, voice_name, storedPath, audio_url, format, reg.campaignId]
+    [companyId, voice_name, storedPath, audio_url, format, reg.campaignId],
   );
 
   return {

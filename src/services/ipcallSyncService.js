@@ -1,12 +1,12 @@
 // src/services/ipcallSyncService.js
 const axios = require('axios');
 const db = require('../config/db');
-const settingsService = require('./settingsService');   // 🆕
+const settingsService = require('./settingsService');
 
 const IPCALL_BASE = process.env.IPCALL_BASE_URL || 'https://ipcall.bd/voiceapi';
 
 // ============================================================
-// Helper
+// Helper: Get API key from DB
 // ============================================================
 async function getApiKey() {
   const apiKey = await settingsService.getIpcallApiKey();
@@ -14,21 +14,26 @@ async function getApiKey() {
   return apiKey;
 }
 
+// ============================================================
+// Status mapper — robust
+// ============================================================
 function mapIpcallStatusToDb(ipcallStatus) {
   const s = String(ipcallStatus || '').toLowerCase().trim();
-  if (s === 'answered') return 'completed';
+  if (s === 'answered' || s === 'answer') return 'completed';
   if (s === 'busy') return 'busy';
-  if (s === 'no answer') return 'no-answer';
+  if (s === 'no answer' || s === 'no-answer' || s === 'noanswer') return 'no-answer';
   if (s === 'missed') return 'failed';
   if (s === 'failed') return 'failed';
+  if (s === 'ringing') return 'ringing';
+  if (s === 'in-progress' || s === 'in progress') return 'in-progress';
   return 'completed';
 }
 
 // ============================================================
-// Fetch /calllogs/
+// Fetch IPCall /calllogs/
 // ============================================================
 async function fetchCallLogs({ date_from, date_to, page = 1, per_page = 200 } = {}) {
-  const apiKey = await getApiKey();   // ✅ DB থেকে
+  const apiKey = await getApiKey();
 
   const url = new URL(`${IPCALL_BASE}/calllogs/`);
   url.searchParams.set('apikey', apiKey);
@@ -42,16 +47,17 @@ async function fetchCallLogs({ date_from, date_to, page = 1, per_page = 200 } = 
 }
 
 // ============================================================
-// Sync recent calls
+// ✅ FIXED: Sync pending calls by phone number
 // ============================================================
 async function syncRecentCalls() {
   try {
+    // ✅ FIX: Find pending calls (NOT external_call_id dependent)
     const [rows] = await db.query(
-      `SELECT id, external_call_id
+      `SELECT id, phone_number, campaign_id, status, created_at
          FROM campaign_numbers
-        WHERE external_call_id IS NOT NULL
-          AND (duration_seconds IS NULL OR duration_seconds = 0 OR recording_url IS NULL)
-          AND created_at >= DATE_SUB(NOW(), INTERVAL 7 DAY)
+        WHERE status IN ('queued', 'ringing', 'in-progress')
+          AND created_at >= DATE_SUB(NOW(), INTERVAL 2 DAY)
+        ORDER BY id DESC
         LIMIT 500`
     );
 
@@ -59,15 +65,18 @@ async function syncRecentCalls() {
       return { synced: 0, message: 'Nothing to sync' };
     }
 
+    console.log(`[IPCallSync] Checking ${rows.length} pending calls`);
+
+    // Fetch IPCall call logs from last 2 days
     const today = new Date().toISOString().slice(0, 10);
-    const sevenDaysAgo = new Date(Date.now() - 7 * 86400000).toISOString().slice(0, 10);
+    const twoDaysAgo = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10);
 
     const allLogs = [];
     let page = 1;
 
     while (true) {
       const resp = await fetchCallLogs({
-        date_from: sevenDaysAgo,
+        date_from: twoDaysAgo,
         date_to: today,
         page,
         per_page: 200,
@@ -78,38 +87,94 @@ async function syncRecentCalls() {
 
       if (page >= (resp.total_pages || 1)) break;
       page += 1;
+      if (page > 10) break; // Safety
     }
 
-    const logMap = new Map(allLogs.map((l) => [String(l.id), l]));
+    if (!allLogs.length) {
+      console.log('[IPCallSync] No call logs fetched from IPCall');
+      return { fetched: 0, updated: 0 };
+    }
+
+    // ✅ Group logs by caller phone number (keep latest)
+    const logByPhone = new Map();
+    for (const log of allLogs) {
+      if (log.caller) {
+        const phone = String(log.caller);
+        const existing = logByPhone.get(phone);
+        // Keep the latest log
+        if (!existing || (log.call_time && log.call_time > existing.call_time)) {
+          logByPhone.set(phone, log);
+        }
+      }
+    }
 
     let updated = 0;
+    const touchedCampaigns = new Set();
+
     for (const row of rows) {
-      const log = logMap.get(String(row.external_call_id));
+      const log = logByPhone.get(String(row.phone_number));
       if (!log) continue;
+
+      const dbStatus = mapIpcallStatusToDb(log.status);
 
       const [result] = await db.query(
         `UPDATE campaign_numbers
-           SET duration_seconds = ?,
-               status = ?,
-               recording_url = ?,
-               ip_number = ?,
-               agent = ?,
-               updated_at = NOW()
-         WHERE external_call_id = ?`,
+            SET status = ?,
+                duration_seconds = ?,
+                external_call_id = ?,
+                recording_url = ?,
+                ip_number = ?,
+                agent = ?,
+                updated_at = NOW()
+          WHERE id = ?`,
         [
+          dbStatus,
           log.duration || 0,
-          mapIpcallStatusToDb(log.status),
+          String(log.id),
           log.recording || null,
           log.ipnumber || null,
           log.agent || null,
-          String(row.external_call_id),
+          row.id,
         ]
       );
 
-      if (result.affectedRows > 0) updated += 1;
+      if (result.affectedRows > 0) {
+        updated += 1;
+        touchedCampaigns.add(row.campaign_id);
+        console.log(`[IPCallSync] ✅ Row ${row.id} (${row.phone_number}) → ${dbStatus}`);
+      }
     }
 
-    console.log(`[IPCallSync] fetched=${allLogs.length} updated=${updated}`);
+    // ✅ Recalculate calls_completed for touched campaigns
+    for (const campaignId of touchedCampaigns) {
+      await db.query(
+        `UPDATE campaigns c
+            SET c.calls_completed = (
+              SELECT COUNT(*) FROM campaign_numbers
+              WHERE campaign_id = c.id AND status = 'completed'
+            ),
+            c.updated_at = NOW()
+          WHERE c.id = ?`,
+        [campaignId]
+      );
+
+      // Mark campaign completed if no pending calls
+      const [[summary]] = await db.query(
+        `SELECT SUM(CASE WHEN status IN ('queued','ringing','in-progress') THEN 1 ELSE 0 END) AS pending
+           FROM campaign_numbers WHERE campaign_id = ?`,
+        [campaignId]
+      );
+
+      if ((summary?.pending || 0) === 0) {
+        await db.query(
+          `UPDATE campaigns SET status = 'completed', updated_at = NOW() WHERE id = ?`,
+          [campaignId]
+        );
+        console.log(`[IPCallSync] Campaign ${campaignId} marked completed`);
+      }
+    }
+
+    console.log(`[IPCallSync] ✅ fetched=${allLogs.length} updated=${updated}`);
     return { fetched: allLogs.length, updated };
   } catch (err) {
     console.error('[IPCallSync] error:', err.message);
@@ -121,7 +186,7 @@ async function syncRecentCalls() {
 // Get call logs for frontend
 // ============================================================
 async function getIpcallCallLogs(filters = {}) {
-  const apiKey = await getApiKey();   // ✅ DB থেকে
+  const apiKey = await getApiKey();
 
   const url = new URL(`${IPCALL_BASE}/calllogs/`);
   url.searchParams.set('apikey', apiKey);
