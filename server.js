@@ -1,7 +1,15 @@
+// ============================================================
+// IMPORTS — MUST come first
+// ============================================================
 const path = require("path");
 const dotenv = require("dotenv");
-const envPath = path.join(__dirname, ".env");
+const express = require("express");
+const cors = require("cors");
 
+// ============================================================
+// Load env
+// ============================================================
+const envPath = path.join(__dirname, ".env");
 const result = dotenv.config({ path: envPath });
 
 if (result.error) {
@@ -11,9 +19,9 @@ if (result.error) {
   console.log("✅ .env file loaded successfully");
 }
 
-const express = require("express");
-const cors = require("cors");
-
+// ============================================================
+// Routes
+// ============================================================
 const authRoutes = require("./src/routes/authRoutes");
 const subscriptionRoutes = require("./src/routes/subscriptionRoutes");
 const campaignRoutes = require("./src/routes/campaignRoutes");
@@ -30,39 +38,46 @@ const settingsRoutes = require("./src/routes/settingsRoutes");
 const app = express();
 
 // ============================================================
-// 🆕 CORS Configuration — Explicit whitelist
+// 🚨 CRITICAL: BODY PARSERS MUST BE FIRST (before routes)
 // ============================================================
 
+// JSON parser — for frontend API calls AND IPCall webhook
+app.use(express.json({ limit: "10mb" }));
+
+// URL-encoded parser — for form submissions
+app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+
+// Raw text fallback — in case IPCall sends unexpected content type
+app.use(express.text({ type: ["text/*", "application/*"], limit: "10mb" }));
+
+// ============================================================
+// CORS
+// ============================================================
 const ALLOWED_ORIGINS = [
   "https://aicallbd.com",
   "https://www.aicallbd.com",
-    "https://api.aicallbd.com",                
+  "https://api.aicallbd.com",
   "https://ai-calling-frontend-six.vercel.app",
   "http://localhost:3000",
   "http://localhost:3001",
 ];
 
-
 const corsOptions = {
   origin: function (origin, callback) {
     if (!origin) return callback(null, true);
 
-    // Exact whitelist match
     if (ALLOWED_ORIGINS.includes(origin)) {
       return callback(null, true);
     }
 
-    // ✅ Allow any *.aicallbd.com subdomain
     if (origin.endsWith(".aicallbd.com") || origin === "https://aicallbd.com") {
       return callback(null, true);
     }
 
-    // ✅ Allow Vercel preview deployments
     if (origin.endsWith(".vercel.app")) {
       return callback(null, true);
     }
 
-    // ✅ Allow Railway deployments
     if (origin.endsWith(".railway.app")) {
       return callback(null, true);
     }
@@ -93,13 +108,7 @@ app.use((req, res, next) => {
 });
 
 // ============================================================
-// Body parsers
-// ============================================================
-app.use(express.json({ limit: "10mb" }));
-app.use(express.urlencoded({ extended: true }));
-
-// ============================================================
-// ✅ LOGGER MIDDLEWARE — MUST BE BEFORE ROUTES
+// LOGGER — MUST BE BEFORE ROUTES
 // ============================================================
 app.use((req, res, next) => {
   if (
@@ -109,7 +118,6 @@ app.use((req, res, next) => {
   ) {
     console.log("====================================");
     console.log("[REQUEST]", req.method, req.originalUrl);
-    console.log("HEADERS:", JSON.stringify(req.headers));
     console.log("QUERY:", JSON.stringify(req.query));
     console.log("BODY:", JSON.stringify(req.body));
     console.log("====================================");
@@ -117,11 +125,13 @@ app.use((req, res, next) => {
   next();
 });
 
+// ============================================================
 // Static uploads
+// ============================================================
 app.use("/uploads", express.static(path.join(__dirname, "..", "uploads")));
 
 // ============================================================
-// Routes
+// ROUTES
 // ============================================================
 app.use("/api/auth", authRoutes);
 app.use("/api/subscriptions", subscriptionRoutes);
@@ -137,7 +147,7 @@ app.use("/api/webhooks", webhookRoutes);
 app.use("/api/admin/settings", settingsRoutes);
 
 // ============================================================
-// Health check
+// HEALTH CHECK
 // ============================================================
 app.get("/health", (req, res) => {
   res.json({
@@ -150,7 +160,7 @@ app.get("/health", (req, res) => {
 });
 
 // ============================================================
-// 404 Handler
+// 404 HANDLER
 // ============================================================
 app.use((req, res) => {
   res.status(404).json({
@@ -161,7 +171,7 @@ app.use((req, res) => {
 });
 
 // ============================================================
-// Error Handler
+// ERROR HANDLER
 // ============================================================
 app.use((err, req, res, next) => {
   console.error("❌ Server error:", err.message);
@@ -180,7 +190,7 @@ app.use((err, req, res, next) => {
 });
 
 // ============================================================
-// Server start
+// SERVER START
 // ============================================================
 const PORT = process.env.PORT || 5000;
 
@@ -188,4 +198,15 @@ app.listen(PORT, () => {
   console.log(`✅ Server running on port ${PORT}`);
   console.log(`✅ CORS allowed origins:`, ALLOWED_ORIGINS.join(", "));
   console.log(`✅ BASE_URL:`, process.env.BASE_URL || "(not set!)");
+});
+
+// ============================================================
+// GLOBAL ERROR HANDLERS
+// ============================================================
+process.on("unhandledRejection", (reason) => {
+  console.error("❌ Unhandled Rejection:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("❌ Uncaught Exception:", err);
 });
