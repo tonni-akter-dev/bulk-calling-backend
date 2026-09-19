@@ -1,94 +1,15 @@
-// const db = require('../config/db');
-// const fs = require('fs').promises;
-// const path = require('path');
-
-// async function getVoiceFiles(companyId) {
-//   const [files] = await db.query(
-//     `SELECT
-//       af.id,
-//       af.original_name AS name,
-//       af.format,
-//       af.file_size_mb AS size,
-//       af.public_url AS url,
-//       af.created_at AS createdAt
-//     FROM audio_files af
-//     WHERE af.company_id = ?
-//     ORDER BY af.id DESC`,
-//     [companyId]
-//   );
-
-//   return files.map((file, index) => ({
-//     sn: index + 1,
-//     id: file.id,
-//     name: file.name,
-//     format: (file.format || "MP3").toUpperCase(),
-//     size: `${file.size || 0} MB`,
-//     url: file.url,
-//     createdAt: file.createdAt,
-//   }));
-// }
-
-
-// async function uploadVoiceFile(companyId, { fileName, file }) {
-//   if (!fileName) throw new Error('File name is required');
-//   if (!file) throw new Error('Audio file is required');
-
-//   const extension = path.extname(file.originalname).replace('.', '').toLowerCase();
-//   const allowedFormats = ['mp3', 'wav', 'ogg'];
-//   if (!allowedFormats.includes(extension)) {
-//     throw new Error('Unsupported format. Allowed: mp3, wav, ogg');
-//   }
-
-//   const fileSizeMb = (file.size / (1024 * 1024)).toFixed(1);
-//   const publicUrl = `${process.env.BASE_URL}/uploads/audio/${file.filename}`;
-
-//   const [result] = await db.query(
-//     `INSERT INTO audio_files (company_id, original_name, stored_path, format, file_size_mb, public_url) 
-//      VALUES (?, ?, ?, ?, ?, ?)`,
-//     [companyId, fileName, file.path, extension, fileSizeMb, publicUrl]
-//   );
-
-//   return {
-//     id: result.insertId,
-//     name: fileName,
-//     format: extension.toUpperCase(),
-//     size: `${fileSizeMb} MB`,
-//     url: publicUrl,
-//   };
-// }
-
-// async function deleteVoiceFile(companyId, fileId) {
-//   const [[file]] = await db.query(
-//     `SELECT stored_path FROM audio_files WHERE id = ? AND company_id = ?`,
-//     [fileId, companyId]
-//   );
-
-//   if (!file) throw new Error('Audio file not found');
-
-//   // Remove from filesystem
-//   try {
-//     await fs.unlink(file.stored_path);
-//   } catch (err) {
-//     console.warn(`File deletion error from disk: ${err.message}`);
-//   }
-
-//   // Remove from DB
-//   await db.query(`DELETE FROM audio_files WHERE id = ? AND company_id = ?`, [fileId, companyId]);
-
-//   return true;
-// }
-
-// module.exports = { getVoiceFiles, uploadVoiceFile, deleteVoiceFile };
+// src/services/voiceFileService.js
 const db = require('../config/db');
 const fs = require('fs').promises;
 const path = require('path');
+const settingsService = require('./settingsService');   // 🆕
 
 // ============================================
-// IP Call BD helper
+// IP Call BD helper — DB key use
 // ============================================
 async function registerWithIpcall({ voice_name, audio_url }) {
-  const apiKey = process.env.IPCALL_API_KEY;
-  if (!apiKey) throw new Error('IPCALL_API_KEY not configured');
+  const apiKey = await settingsService.getIpcallApiKey();
+  if (!apiKey) throw new Error('IPCall API key not configured. Set it in Admin → Settings.');
 
   const url = new URL('https://ipcall.bd/voiceapi/uploadvoice/');
   url.searchParams.set('apikey', apiKey);
@@ -106,12 +27,9 @@ async function registerWithIpcall({ voice_name, audio_url }) {
     throw new Error(data.message || 'IP Call BD upload failed');
   }
 
-  return data; // { status, campaign_id, Name }
+  return data;
 }
 
-// ============================================
-// GET list
-// ============================================
 async function getVoiceFiles(companyId) {
   const [files] = await db.query(
     `SELECT
@@ -135,22 +53,16 @@ async function getVoiceFiles(companyId) {
     format: (file.format || 'MP3').toUpperCase(),
     size: `${file.size || 0} MB`,
     url: file.url,
-    campaignId: file.campaignId || null, // ← IP Call BD campaign_id
+    campaignId: file.campaignId || null,
     createdAt: file.createdAt,
   }));
 }
 
-// ============================================
-// UPLOAD — local save + IP Call BD register
-// ============================================
 async function uploadVoiceFile(companyId, { fileName, file }) {
   if (!fileName) throw new Error('File name is required');
   if (!file) throw new Error('Audio file is required');
 
-  const extension = path
-    .extname(file.originalname)
-    .replace('.', '')
-    .toLowerCase();
+  const extension = path.extname(file.originalname).replace('.', '').toLowerCase();
   const allowedFormats = ['mp3', 'wav', 'ogg'];
   if (!allowedFormats.includes(extension)) {
     throw new Error('Unsupported format. Allowed: mp3, wav, ogg');
@@ -159,9 +71,6 @@ async function uploadVoiceFile(companyId, { fileName, file }) {
   const fileSizeMb = (file.size / (1024 * 1024)).toFixed(1);
   const publicUrl = `${process.env.BASE_URL}/uploads/audio/${file.filename}`;
 
-  // ============================================
-  // ১. IP Call BD এ register করো (আগে)
-  // ============================================
   let campaignId = null;
   try {
     const ipcall = await registerWithIpcall({
@@ -170,30 +79,17 @@ async function uploadVoiceFile(companyId, { fileName, file }) {
     });
     campaignId = ipcall.campaign_id;
   } catch (err) {
-    // Local file মুছে ফেলো (কারণ IP Call BD এ register হয়নি)
     try {
       await fs.unlink(file.path);
     } catch (_) {}
-
     throw new Error(`IPCall register failed: ${err.message}`);
   }
 
-  // ============================================
-  // ২. DB তে save (campaign_id সহ)
-  // ============================================
   const [result] = await db.query(
     `INSERT INTO audio_files
       (company_id, original_name, stored_path, format, file_size_mb, public_url, campaign_id)
      VALUES (?, ?, ?, ?, ?, ?, ?)`,
-    [
-      companyId,
-      fileName,
-      file.path,
-      extension,
-      fileSizeMb,
-      publicUrl,
-      campaignId,
-    ]
+    [companyId, fileName, file.path, extension, fileSizeMb, publicUrl, campaignId]
   );
 
   return {
@@ -206,9 +102,6 @@ async function uploadVoiceFile(companyId, { fileName, file }) {
   };
 }
 
-// ============================================
-// DELETE
-// ============================================
 async function deleteVoiceFile(companyId, fileId) {
   const [[file]] = await db.query(
     `SELECT stored_path FROM audio_files WHERE id = ? AND company_id = ?`,
@@ -217,14 +110,12 @@ async function deleteVoiceFile(companyId, fileId) {
 
   if (!file) throw new Error('Audio file not found');
 
-  // Local file delete
   try {
     await fs.unlink(file.stored_path);
   } catch (err) {
     console.warn(`File deletion error from disk: ${err.message}`);
   }
 
-  // DB থেকে delete
   await db.query(
     `DELETE FROM audio_files WHERE id = ? AND company_id = ?`,
     [fileId, companyId]
@@ -233,8 +124,4 @@ async function deleteVoiceFile(companyId, fileId) {
   return true;
 }
 
-module.exports = {
-  getVoiceFiles,
-  uploadVoiceFile,
-  deleteVoiceFile,
-};
+module.exports = { getVoiceFiles, uploadVoiceFile, deleteVoiceFile };

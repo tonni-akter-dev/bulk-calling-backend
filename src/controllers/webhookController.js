@@ -44,7 +44,7 @@ async function voiceStatus(req, res) {
   const { CallStatus, CallDuration } = req.body;
 
   const statusMap = {
-    completed: 'answered', // refined further by AMD callback if it was actually a machine
+    completed: 'answered',
     busy: 'no_answer',
     'no-answer': 'no_answer',
     failed: 'failed',

@@ -3,7 +3,6 @@ const router = express.Router();
 const {
   requireAuth,
   requireActiveSubscription,
-  requireAdmin,
 } = require("../middleware/auth");
 const { uploadAudio } = require("../middleware/upload");
 const asyncHandler = require("../utils/asyncHandler");

@@ -1,9 +1,18 @@
 // src/services/ipcallSyncService.js
 const axios = require('axios');
 const db = require('../config/db');
+const settingsService = require('./settingsService');   // 🆕
 
 const IPCALL_BASE = process.env.IPCALL_BASE_URL || 'https://ipcall.bd/voiceapi';
-const API_KEY = process.env.IPCALL_API_KEY;
+
+// ============================================================
+// Helper
+// ============================================================
+async function getApiKey() {
+  const apiKey = await settingsService.getIpcallApiKey();
+  if (!apiKey) throw new Error('IPCall API key not configured');
+  return apiKey;
+}
 
 function mapIpcallStatusToDb(ipcallStatus) {
   const s = String(ipcallStatus || '').toLowerCase().trim();
@@ -16,11 +25,13 @@ function mapIpcallStatusToDb(ipcallStatus) {
 }
 
 // ============================================================
-// Fetch /calllogs/ from IP Call BD
+// Fetch /calllogs/
 // ============================================================
 async function fetchCallLogs({ date_from, date_to, page = 1, per_page = 200 } = {}) {
+  const apiKey = await getApiKey();   // ✅ DB থেকে
+
   const url = new URL(`${IPCALL_BASE}/calllogs/`);
-  url.searchParams.set('apikey', API_KEY);
+  url.searchParams.set('apikey', apiKey);
   if (date_from) url.searchParams.set('date_from', date_from);
   if (date_to) url.searchParams.set('date_to', date_to);
   url.searchParams.set('page', String(page));
@@ -31,7 +42,7 @@ async function fetchCallLogs({ date_from, date_to, page = 1, per_page = 200 } = 
 }
 
 // ============================================================
-// Sync recent calls (last 7 days, incomplete rows)
+// Sync recent calls
 // ============================================================
 async function syncRecentCalls() {
   try {
@@ -105,9 +116,12 @@ async function syncRecentCalls() {
     return { error: err.message };
   }
 }
+
+// ============================================================
+// Get call logs for frontend
+// ============================================================
 async function getIpcallCallLogs(filters = {}) {
-  const apiKey = process.env.IPCALL_API_KEY;
-  if (!apiKey) throw new Error('IPCALL_API_KEY not configured');
+  const apiKey = await getApiKey();   // ✅ DB থেকে
 
   const url = new URL(`${IPCALL_BASE}/calllogs/`);
   url.searchParams.set('apikey', apiKey);
@@ -125,4 +139,4 @@ async function getIpcallCallLogs(filters = {}) {
   return data;
 }
 
-module.exports = { fetchCallLogs, syncRecentCalls,getIpcallCallLogs };
+module.exports = { fetchCallLogs, syncRecentCalls, getIpcallCallLogs };
