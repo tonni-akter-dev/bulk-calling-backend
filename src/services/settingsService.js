@@ -1,9 +1,15 @@
 // src/services/settingsService.js
 const db = require('../config/db');
 
-// ============================================================
-// Load raw settings from DB — always fresh, no cache
-// ============================================================
+let cache = null;
+let cacheAt = 0;
+const TTL = 60_000; // 60s
+
+function invalidateCache() {
+  cache = null;
+  cacheAt = 0;
+}
+
 async function loadRaw() {
   const [rows] = await db.query(
     `SELECT setting_key, setting_value, is_secret, updated_at
@@ -15,46 +21,48 @@ async function loadRaw() {
 }
 
 // ============================================================
-// Get API key — Direct DB read, no cache
+// Get API key — DB only, no env fallback
 // ============================================================
 async function getIpcallApiKey() {
+  // Return from cache if fresh
+  if (cache && Date.now() - cacheAt < TTL) {
+    return cache.apiKey;
+  }
+
   const raw = await loadRaw();
 
+  // ✅ Only DB — no env fallback
   const keyRow = raw['ipcall_api_key'];
   const apiKey = keyRow?.setting_value
     ? String(keyRow.setting_value).trim()
     : '';
 
-  console.log('🔑 [settings] getIpcallApiKey →', {
-    found: !!keyRow,
-    hasValue: !!apiKey,
-    keyLength: apiKey.length,
-    keyPrefix: apiKey ? apiKey.substring(0, 10) + '...' : '(empty)',
-    keySuffix: apiKey ? '...' + apiKey.slice(-10) : '(empty)',
-    rawLength: keyRow?.setting_value?.length || 0,
-  });
-
   if (!apiKey) {
-    console.warn('⚠️ [settings] IPCall API key not found in DB');
+    console.warn('⚠️ [settings] IPCall API key not found in DB. Please set it in Admin → Settings.');
   }
+
+  cache = {
+    apiKey,
+    delaySeconds: Number(raw['ipcall_delay_seconds']?.setting_value || 38),
+    maxBatchSize: Number(raw['ipcall_max_batch_size']?.setting_value || 20),
+  };
+  cacheAt = Date.now();
 
   return apiKey;
 }
 
-// ============================================================
-// Get delay seconds — Direct DB read
-// ============================================================
 async function getDelaySeconds() {
-  const raw = await loadRaw();
-  return Number(raw['ipcall_delay_seconds']?.setting_value || 38);
+  if (!cache || Date.now() - cacheAt >= TTL) {
+    await getIpcallApiKey();
+  }
+  return cache?.delaySeconds ?? 38;
 }
 
-// ============================================================
-// Get max batch size — Direct DB read
-// ============================================================
 async function getMaxBatchSize() {
-  const raw = await loadRaw();
-  return Number(raw['ipcall_max_batch_size']?.setting_value || 20);
+  if (!cache || Date.now() - cacheAt >= TTL) {
+    await getIpcallApiKey();
+  }
+  return cache?.maxBatchSize ?? 20;
 }
 
 // ============================================================
@@ -78,7 +86,7 @@ async function getPublicSettings() {
 }
 
 // ============================================================
-// Save — UPSERT (row না থাকলেও insert হবে)
+// Save — plain text
 // ============================================================
 async function updateSettings(adminUserId, { apiKey, delaySeconds, maxBatchSize }) {
   const jobs = [];
@@ -86,16 +94,13 @@ async function updateSettings(adminUserId, { apiKey, delaySeconds, maxBatchSize 
   if (apiKey && String(apiKey).trim()) {
     const cleanKey = String(apiKey).trim().replace(/\s+/g, '');
 
-    console.log('🔑 [settings] Saving key (len=' + cleanKey.length + ')');
+    console.log('🔑 [settings] Saving key:', cleanKey);
 
     jobs.push(
       db.query(
-        `INSERT INTO app_settings (setting_key, setting_value, updated_by, updated_at)
-         VALUES ('ipcall_api_key', ?, ?, NOW())
-         ON DUPLICATE KEY UPDATE
-           setting_value = VALUES(setting_value),
-           updated_by = VALUES(updated_by),
-           updated_at = NOW()`,
+        `UPDATE app_settings
+         SET setting_value = ?, updated_by = ?, updated_at = NOW()
+         WHERE setting_key = 'ipcall_api_key'`,
         [cleanKey, adminUserId]
       )
     );
@@ -105,12 +110,9 @@ async function updateSettings(adminUserId, { apiKey, delaySeconds, maxBatchSize 
     const n = Math.max(1, Math.min(600, Number(delaySeconds)));
     jobs.push(
       db.query(
-        `INSERT INTO app_settings (setting_key, setting_value, updated_by, updated_at)
-         VALUES ('ipcall_delay_seconds', ?, ?, NOW())
-         ON DUPLICATE KEY UPDATE
-           setting_value = VALUES(setting_value),
-           updated_by = VALUES(updated_by),
-           updated_at = NOW()`,
+        `UPDATE app_settings
+         SET setting_value = ?, updated_by = ?, updated_at = NOW()
+         WHERE setting_key = 'ipcall_delay_seconds'`,
         [String(n), adminUserId]
       )
     );
@@ -120,27 +122,17 @@ async function updateSettings(adminUserId, { apiKey, delaySeconds, maxBatchSize 
     const n = Math.max(1, Math.min(100, Number(maxBatchSize)));
     jobs.push(
       db.query(
-        `INSERT INTO app_settings (setting_key, setting_value, updated_by, updated_at)
-         VALUES ('ipcall_max_batch_size', ?, ?, NOW())
-         ON DUPLICATE KEY UPDATE
-           setting_value = VALUES(setting_value),
-           updated_by = VALUES(updated_by),
-           updated_at = NOW()`,
+        `UPDATE app_settings
+         SET setting_value = ?, updated_by = ?, updated_at = NOW()
+         WHERE setting_key = 'ipcall_max_batch_size'`,
         [String(n), adminUserId]
       )
     );
   }
 
   await Promise.all(jobs);
+  invalidateCache();
   return getPublicSettings();
-}
-
-// ============================================================
-// Legacy exports (kept for backward compatibility)
-// ============================================================
-function invalidateCache() {
-  // No-op now — cache removed
-  console.log('ℹ️ [settings] invalidateCache() called — no cache to clear');
 }
 
 module.exports = {
@@ -149,5 +141,5 @@ module.exports = {
   getMaxBatchSize,
   getPublicSettings,
   updateSettings,
-  invalidateCache,   // kept as no-op for compatibility
+  invalidateCache,
 };
