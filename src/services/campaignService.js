@@ -23,7 +23,7 @@ async function getApiKey() {
 }
 
 async function registerVoiceWithIpcall({ voice_name, audio_url }) {
-  const apiKey = "dfsXXjaJ3BVj6yI5RES0eqnnMcz5BerQYQKvHs9bdCtAbch1u7NpLy2gL3I4";
+  const apiKey = await getApiKey();
 
   const url = new URL(`${IPCALL_BASE}/uploadvoice/`);
   url.searchParams.set("apikey", apiKey);
