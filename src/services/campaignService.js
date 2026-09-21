@@ -537,7 +537,7 @@ async function getAllCampaigns(companyId, role) {
   let query = `
     SELECT
       c.id, c.title AS name, c.total_numbers, c.status, c.created_at,
-      u.username AS created_by, u.email AS created_by_email,
+u.name AS created_by, u.email AS created_by_email,
       c.company_id, comp.name AS company_name,
       af.original_name AS audio_file_name,
       (SELECT COUNT(*) FROM campaign_numbers WHERE campaign_id = c.id AND status = 'completed') AS completed,
@@ -603,7 +603,7 @@ async function getCampaignById(companyId, role, campaignId) {
     SELECT
       c.id, c.title AS name, c.total_numbers, c.status,
       c.created_at, c.updated_at,
-      u.username AS created_by, u.email AS created_by_email,
+u.name AS created_by, u.email AS created_by_email,
       comp.name AS company_name,
       af.original_name AS audio_file_name, af.public_url AS audio_url,
       (SELECT COUNT(*) FROM campaign_numbers WHERE campaign_id = c.id) AS total_processed,

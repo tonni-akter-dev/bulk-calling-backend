@@ -1,127 +1,424 @@
-# Bulk Calling System
+# AI Call BD — Bulk Voice Campaign Platform
 
-Multi-tenant outbound voice-broadcast platform. Two independent billing gates:
+A full-stack platform for launching bulk voice campaigns to Bangladeshi mobile numbers using the **IPCall BD Voice API**. Includes real-time call status tracking, wallet-based billing, call recordings, and an admin dashboard.
 
-1. **Subscription (monthly, paid via bKash)** — unlocks the dashboard at all.
-   No active subscription = no access to anything except the billing/subscription
-   page. Enforced by `requireActiveSubscription` on every `/api/campaigns/*` and
-   `/api/wallet/*` route.
-2. **Wallet / call credit (top up any amount, via bKash)** — pays for the actual
-   calls. Every completed call deducts `rate_per_minute_bdt × minutes` (rounded
-   up) from the company's balance. When balance can't cover one more minute, the
-   running campaign auto-pauses with `pause_reason: "insufficient_balance"` so
-   the frontend can show a "recharge your balance" notice.
+---
 
-Once both are satisfied: create a campaign → paste/upload phone numbers → upload
-a voicemail `.mp3`/`.wav` → click start → numbers get called one by one, and
-whoever answers hears the audio.
+## 🔗 Repositories
 
-Built on Node.js + Express + MySQL, with Twilio doing the actual dialing.
+| Layer | Repository |
+|---|---|
+| Frontend (Next.js) | https://github.com/infoitsolver24/ai-call-bd-frontend |
+| Backend (Node.js) | https://github.com/infoitsolver24/ai-call-bd-backend |
 
-## ⚠️ Before you launch this for real
+---
 
-Bulk outbound calling with pre-recorded audio is regulated in most countries
-(TCPA in the US, similar telemarketing rules elsewhere, and BTRC regulations in
-Bangladesh for automated/robocall traffic). This code includes the technical
-hooks — opt-out via "press 9", a do-not-call list that's checked before every
-call, per-plan call caps — but **you are responsible for**:
-- Only calling numbers you have proper consent/legal basis to call
-- Respecting national Do-Not-Call registries
-- Disclosing who's calling, per local law
-- Rate limits Twilio and local telecoms impose on robocall-style traffic
+## ✨ Features
 
-## Stack
-- **Backend**: Node.js, Express
-- **Database**: MySQL (schema in `db/schema.sql`)
-- **Calling**: Twilio Programmable Voice (with Answering Machine Detection)
-- **Billing**: bKash Payment Gateway (Tokenized Checkout) — bKash has no native
-  recurring subscription API, so this app simulates one: each successful
-  payment activates/renews a 30-day subscription period in our own DB.
+- 📞 **Bulk Voice Campaigns** — Upload audio once, call hundreds of BD numbers
+- 🎙️ **Voice File Management** — Upload via file or public URL
+- ⚡ **Real-time Call Status** — `Queued → Ringing → Answered / Busy / Failed`
+- 🎧 **Call Recordings** — Auto-fetched from IPCall after each call
+- 💰 **Wallet & Billing** — Per-minute billing with pre-launch balance check
+- 📊 **Live Dashboard** — Summary metrics (Total / Success / Failed / Active)
+- 🔐 **JWT Auth** — Company-scoped access with admin/super-admin roles
+- 🔄 **Auto Sync & Reaper** — Stuck calls auto-marked failed after 15 min
+- 📱 **Responsive UI** — Built with Tailwind CSS
 
-## Setup
+---
 
-1. **Database**
-   ```bash
-   mysql -u root -p < db/schema.sql
+## 🏗️ Tech Stack
+
+### Backend
+- **Runtime:** Node.js `v24.19.0`
+- **Framework:** Express.js
+- **Database:** MySQL 8
+- **Auth:** JWT
+- **HTTP Client:** Axios
+- **Upload:** Multer
+
+### Frontend
+- **Framework:** Next.js 14 (App Router)
+- **Language:** TypeScript
+- **Styling:** Tailwind CSS
+- **Icons:** Lucide React
+- **Notifications:** Sonner
+
+
+## 📁 Project Structure
+
+### Backend
+
+```
+ai-call-bd-backend/
+├── src/
+│   ├── config/
+│   │   ├── db.js                # MySQL connection pool
+│   │   └── multer.js            # Audio upload config
+│   ├── middleware/
+│   │   ├── auth.js              # JWT verification
+│   │   ├── upload.js            # Multer wrapper
+│   │   └── errorHandler.js
+│   ├── routes/
+│   │   ├── campaignRoutes.js
+│   │   ├── webhookRoutes.js
+│   │   ├── voiceFileRoutes.js
+│   │   └── index.js
+│   ├── controllers/
+│   │   ├── campaignController.js
+│   │   ├── voiceFileController.js
+│   │   └── authController.js
+│   ├── services/
+│   │   ├── campaignService.js       # IPCall launch + webhook
+│   │   ├── ipcallSyncService.js     # Background log sync + reaper
+│   │   ├── settingsService.js
+│   │   └── walletService.js
+│   ├── utils/
+│   │   ├── numberParser.js
+│   │   └── asyncHandler.js
+│   └── app.js
+├── database/
+│   └── schema.sql
+├── uploads/
+│   └── audio/                   # Uploaded voice files
+├── .env.example
+├── .gitignore
+├── ecosystem.config.js          # PM2 config
+├── package.json
+└── server.js
+```
+
+### Frontend
+
+```
+ai-call-bd-frontend/
+├── app/
+│   ├── admin/
+│   │   ├── campaigns/
+│   │   │   ├── create/page.tsx   # Create campaign page
+│   │   │   └── page.tsx          # Campaign list
+│   │   └── dashboard/
+│   ├── lib/
+│   │   └── authToken.ts
+│   └── layout.tsx
+├── components/
+├── public/
+├── .env.local.example
+├── next.config.js
+├── package.json
+├── tailwind.config.ts
+└── tsconfig.json
+```
+
+---
+
+## 🚀 Local Development
+
+### Prerequisites
+
+- **Node.js:** `v24.19.0` — verify with `node --version`
+- **npm:** `v10+`
+- **MySQL:** `v8.0+`
+- **Git**
+
+### 1. Clone Both Repositories
+
+```bash
+git clone https://github.com/infoitsolver24/ai-call-bd-backend.git
+git clone https://github.com/infoitsolver24/ai-call-bd-frontend.git
+```
+
+### 2. Backend Setup
+
+```bash
+cd ai-call-bd-backend
+npm install
+npm run dev
+Backend will start on **http://localhost:5000**
+
+### 3. Frontend Setup
+
+```bash
+cd ../ai-call-bd-frontend
+npm install
+npm run dev
+Frontend will start on **http://localhost:3000**
+```
+
+## 🔑 Initial Configuration
+
+After both servers are running:
+
+1. **Register a company account** via `/register`
+2. **Login as super admin** (seed account or promote via DB):
+
+3. Navigate to **Admin → Settings** and set the **IPCall BD API Key**
+   - Get it from https://ipcall.bd → Developers → API Key
+
+4. Set **delay seconds** and **max batch size** for dispatch throttling
+
+5. Top up the **wallet** for the company (or disable balance check in dev)
+
+---
+
+## 🔌 IPCall BD Integration
+
+The backend integrates four IPCall endpoints:
+
+| Action | Endpoint | Method |
+|---|---|---|
+| Register voice file | `/voiceapi/uploadvoice/` | GET |
+| Trigger call | `/voiceapi/newrequest/` | GET |
+| Fetch call logs | `/voiceapi/calllogs/` | GET |
+| Incoming webhook | `/api/webhooks/voice-status` | POST |
+
+### Webhook Flow
+
+```
+Campaign launched
+       ↓
+POST /campaigns/launch → dispatchIpcallRequests()
+       ↓
+IPCall /newrequest/ per number → status = 'ringing'
+       ↓
+IPCall POST /api/webhooks/voice-status
+       ↓
+handleVoiceWebhook() → status = 'completed' | 'busy' | 'failed' ...
+       ↓
+backfillCallDetails() → fetch duration + recording from /calllogs/
+       ↓
+Frontend polls /campaigns/live-logs every 30s → UI updates
+```
+
+### Webhook Payload (from IPCall)
+
+```json
+{
+  "id": "782394",
+  "status_code": "1",
+  "status": "Answered",
+  "DTMF": "1",
+  "data": "camp_5_num_23"
+}
+```
+
+The `data` field is set to `camp_<campaignId>_num_<numberRowId>` at dispatch time so webhook matching is deterministic.
+
+---
+
+## 📡 API Reference (Backend)
+
+All routes require JWT auth unless noted.
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/campaigns/launch` | Launch bulk campaign |
+| `GET` | `/campaigns/live-logs` | Real-time status + summary |
+| `GET` | `/campaigns/history` | Paginated call history |
+| `GET` | `/campaigns` | List all campaigns |
+| `GET` | `/campaigns/:id` | Campaign detail + numbers |
+| `PATCH` | `/campaigns/:id/status` | Pause / resume / cancel |
+| `DELETE` | `/campaigns/:id` | Delete campaign |
+| `GET` | `/campaigns/stats` | Dashboard stats |
+| `POST` | `/voice-files/register-url` | Register voice from public URL |
+| `POST` | `/api/webhooks/voice-status` | **IPCall webhook (public)** |
+
+---
+
+
+## 🌍 Deployment (cPanel + Node.js)
+
+
+### Prerequisites
+
+- cPanel hosting with **Setup Node.js App** (Node.js 20+ selectable)
+- SSH / cPanel Terminal access
+- MySQL database (created in cPanel)
+- Two domains (recommended):
+  - `api.aicallbd.com` → backend (sub domain) 
+  - `aicallbd.com` → frontend
+
+
+---
+
+### 📦 Step 1 — Create MySQL Database
+
+1. cPanel → **MySQL® Databases**
+2. Create database: `username_ai_call_bd`
+3. Create user: `username_dbuser` with a strong password
+4. Add user to database with **ALL PRIVILEGES**
+
+Import the schema:
+
+```bash
+mysql -u username_dbuser -p username_ai_call_bd < database/schema.sql
+```
+Or use **phpMyAdmin → Import** in cPanel.
+
+---
+
+### 📤 Step 2 — Upload Backend Files
+
+**Do NOT upload `node_modules/` or `.env`** — those are created on the server.
+
+
+####  File Manager / FTP
+
+1. Zip your local backend (exclude `node_modules`, `.env`, `.git`)
+2. Upload to `/home/USERNAME/ai-call-bd-backend/`
+3. Extract via File Manager
+
+---
+
+### ⚙️ Step 3 — Create Node.js App (Backend)
+
+1. cPanel → **Software → Setup Node.js App**
+2. Click **Create Application**
+3. Fill:
+
+   | Field | Value |
+   |---|---|
+   | Node.js version | **20.x** or newer |
+   | Application mode | **Production** |
+   | Application root | `ai-call-bd-backend` |
+   | Application URL | `api.yourdomain.com` |
+   | Application startup file | `server.js` |
+
+4. Click **Create**
+
+---
+
+### 🔑 Step 4 — Set Environment Variables
+
+In the same Node.js App screen, scroll to **Environment Variables** and add:
+
+
+> ⚠️ `BASE_URL` **must be public HTTPS** — IPCall posts call-status webhooks to `${BASE_URL}/api/webhooks/voice-status`.
+
+> ⚠️ cPanel MySQL username/password always include the cPanel prefix. Use them exactly as shown in MySQL Databases page.
+
+---
+
+### 📥 Step 5 — Install Dependencies & Start
+
+Open **cPanel Terminal** or SSH:
+
+```bash
+# Paste the command from Step 3 (it looks like this):
+source /home/USERNAME/nodevenv/ai-call-bd-backend/20/bin/activate && cd /home/USERNAME/ai-call-bd-backend
+
+# Install production deps
+npm install --production
+```
+
+Then in **Setup Node.js App → your app**, click **Restart**.
+
+Verify the backend responds:
+
+```bash
+curl http://127.0.0.1:5000/api/webhooks/voice-status
+# → {"received":true,"handled":false,"reason":"no_match"}
+```
+
+If you see "Cannot GET /" — that's fine, means the server is up.
+
+
+
+### 🎨 Step 6 — Deploy Frontend (Next.js)
+
+
+#### Option A — Full Next.js Node.js App (SSR, recommended)
+
+1. Upload frontend source to `/home/USERNAME/ai-call-bd-frontend/` (exclude `node_modules`, `.next`, `.env.local`)
+
+2. cPanel → **Setup Node.js App → Create Application**:
+
+   | Field | Value |
+   |---|---|
+   | Node.js version | 20.x |
+   | Application mode | Production |
+   | Application root | `ai-call-bd-frontend` |
+   | Application URL | `app.yourdomain.com` |
+   | Application startup file | `node_modules/next/dist/bin/next` |
+   | Application startup script | `start` |
+
+
+3. Add environment variable in the Node.js App UI:
+
+   ```env
+   NEXT_PUBLIC_API_URL=https://api.yourdomain.com
+   NODE_ENV=production
    ```
-   Already have the database from before? Run the migration instead:
-   ```bash
-   mysql -u root -p < db/migration_001_wallet.sql
-   ```
 
-2. **Environment**
-   ```bash
-   cp .env.example .env
-   # fill in DB creds, JWT_SECRET, Twilio credentials, bKash credentials, BASE_URL
-   ```
-   `BASE_URL` must be a **publicly reachable HTTPS URL** — both Twilio (to fetch
-   TwiML, deliver call-status webhooks, and serve the audio file to play) and
-   bKash (to redirect the browser back after checkout) need to reach your server.
-   For local development, use a tunnel (ngrok, Cloudflare Tunnel, etc.) and put
-   that URL in `BASE_URL`.
+4. Enter the virtualenv and build:
 
-3. **Install & run**
    ```bash
+   source /home/USERNAME/nodevenv/ai-call-bd-frontend/20/bin/activate && cd /home/USERNAME/ai-call-bd-frontend
    npm install
-   npm start        # or `npm run dev` with nodemon
+   npm run build
    ```
 
-## How it fits together
+5. Restart the Node.js app from cPanel.
 
-### A) Subscription — unlocks the dashboard
-1. `POST /api/auth/signup` — creates a company + admin user, returns a JWT.
-2. `GET /api/subscriptions/plans` — list plans (Starter/Growth/Business — edit
-   prices directly in the `plans` table; note `monthly_call_limit` is legacy and
-   no longer enforced now that calls are billed from the wallet instead).
-3. `POST /api/subscriptions/subscribe { planId }` — creates a bKash payment,
-   returns `bkashURL`; redirect the user's browser there to pay.
-4. bKash redirects back to `/api/subscriptions/bkash/callback`, which executes
-   the payment and, on success, activates a 30-day subscription.
-5. `GET /api/subscriptions/me` — check current subscription status; if
-   `current_period_end` has passed, redirect the frontend to the billing page —
-   every campaign/wallet API call will return `402` until they renew.
 
-### B) Wallet — pays for calls
-6. `GET /api/wallet` — current balance + the per-minute rate they're charged
-   (`rate_per_minute_bdt`, set per-company in the `companies` table — default
-   2.5 BDT/min, change it to whatever markup you want over Twilio's cost).
-7. `POST /api/wallet/topup { amount }` — creates a bKash payment for any amount
-   (min 10 BDT), returns `bkashURL` to redirect the user to.
-8. bKash redirects back to `/api/wallet/bkash/callback`, which executes the
-   payment and credits the wallet on success.
-9. `GET /api/wallet/transactions` — full ledger: top-ups (positive) and
-   per-call charges (negative), each call charge referencing the
-   `campaign_numbers` row it paid for.
+### 🔒 Step 7 — Enable SSL (AutoSSL)
 
-### C) Campaigns — actually calling
-10. `POST /api/campaigns` — create a campaign.
-11. `POST /api/campaigns/:id/numbers` — add numbers either as
-    `{ "numbersText": "01711111111\n01722222222" }` JSON, or multipart CSV
-    upload (field name `file`).
-12. `POST /api/campaigns/:id/audio` — multipart upload (field name `file`),
-    `.mp3` or `.wav`, of the voicemail message to play.
-13. `POST /api/campaigns/:id/start` — returns `402 INSUFFICIENT_BALANCE` if the
-    wallet can't cover at least one more minute. Otherwise starts the dialer,
-    which works through the number list with bounded concurrency
-    (`MAX_GLOBAL_CONCURRENT_CALLS`) and skips any number on the do-not-call
-    list. Mid-campaign, if the wallet balance runs out it auto-pauses with
-    `pause_reason: "insufficient_balance"`.
-14. `GET /api/campaigns/:id` — poll for live status counts (answered /
-    voicemail / no_answer / failed / opted_out / pending), plus current wallet
-    balance — use this to drive the "recharge your balance" notification in
-    the UI.
+1. cPanel → **SSL/TLS Status**
+23. Wait ~5 minutes
+3. Verify:
 
-All `/api/*` routes except signup/login/plan-list/bkash-callbacks require
-`Authorization: Bearer <token>`. All `/api/campaigns/*` and `/api/wallet/*`
-routes additionally require an active subscription (`402` otherwise) — that's
-what keeps an expired-subscription company locked out of the dashboard.
+   ```bash
+   curl -I https://api.yourdomain.com
+   curl -I https://app.yourdomain.com
+   ```
+> 🔐 IPCall refuses HTTP webhooks. **HTTPS is mandatory.**
 
-## Scaling notes
-- The dialer in `src/services/dialerQueue.js` is an in-process loop — fine for
-  a single server instance and moderate volumes. For real scale (many
-  thousands of numbers, multiple app servers), swap it for a proper job queue
-  (BullMQ + Redis) — the call-placing and status-tracking logic stays the same.
-- Store audio files on S3/Cloud Storage instead of local disk in production, so
-  the public URL Twilio fetches doesn't depend on a single server's uptime.
-- Add a scheduled job to auto-expire subscriptions (`current_period_end < NOW()`
-  → status `expired`) and to prompt renewal.
+---
+
+### 🔗 Step 8— Verify Webhook Reachability
+
+```bash
+curl https://api.yourdomain.com/api/webhooks/voice-status
+```
+
+Expected:
+
+```json
+{"received":true,"handled":false,"reason":"no_match"}
+```
+
+If this fails:
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| `404` | Route not registered | Check `webhookRoutes.js` mounted at `/api/webhooks` |
+| `502 Bad Gateway` | Node app not running | cPanel → Setup Node.js App → Restart |
+| `503 Service Unavailable` | Passenger not proxying | Check app status is "Running" |
+| `ERR_CONNECTION_REFUSED` | SSL not enabled | Run AutoSSL |
+
+---
+
+### 🔄 Step 9 — Updating After Code Changes
+
+Because cPanel Node.js apps don't auto-deploy, use one of these:
+
+
+### Requirements
+
+- MySQL 8
+- Node.js v24
+
+
+
+## 🐛 Troubleshooting
+
+| Problem | Solution |
+|---|---|
+| Webhook not received | Check `BASE_URL` is public (use ngrok for local) |
+| Call stuck in "Queued" | Verify `dispatchIpcallRequests` completed and webhook reaches backend |
+| Duration shows `0:00` | `backfillCallDetails` couldn't find call in `/calllogs/` — check API key |
+| Campaign stuck in "processing" | Reaper runs every sync; check `syncRecentCalls()` in logs |
+| `ER_ACCESS_DENIED` | MySQL credentials in `.env` are wrong |
+| `IPCall API key not configured` | Set it in Admin → Settings |
+
+---
